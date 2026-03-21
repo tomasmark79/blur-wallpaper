@@ -19,7 +19,7 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BLURRED_PATH = `${GLib.get_tmp_dir()}/blur-wallpaper-blurred.jpg`;
+const CACHE_DIR = GLib.build_filenamev([GLib.get_user_cache_dir(), 'blur-wallpaper']);
 
 export default class BlurWallpaperExtension extends Extension {
     constructor(metadata) {
@@ -48,24 +48,46 @@ export default class BlurWallpaperExtension extends Extension {
                 return;
             }
 
-            const proc = Gio.Subprocess.new(
-                ['magick', picturePath, '-blur', `0x${sigma}`, BLURRED_PATH],
-                Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
+            // ── Cache lookup ─────────────────────────────────────────────────
+            const cacheKey = GLib.compute_checksum_for_string(
+                GLib.ChecksumType.SHA256, `${picturePath}:${sigma}`, -1
             );
-            await new Promise((resolve, reject) => {
-                proc.wait_async(null, (self, result) => {
-                    try {
-                        self.wait_finish(result);
-                        resolve();
-                    } catch (e) {
-                        reject(e);
-                    }
-                });
-            });
-            if (!this._isEnabled || !this._bgSettings) return;
-            if (!proc.get_successful()) return;
+            const cachedPath = GLib.build_filenamev([CACHE_DIR, `${cacheKey}.jpg`]);
+            const cacheFile  = Gio.File.new_for_path(cachedPath);
 
-            const blurredUri = Gio.File.new_for_path(BLURRED_PATH).get_uri();
+            let cacheHit = false;
+            if (cacheFile.query_exists(null)) {
+                try {
+                    const ci = cacheFile.query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+                    const si = Gio.File.new_for_path(picturePath)
+                                  .query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+                    cacheHit = ci.get_attribute_uint64('time::modified') >=
+                               si.get_attribute_uint64('time::modified');
+                } catch (_) { }
+            }
+
+            if (!cacheHit) {
+                GLib.mkdir_with_parents(CACHE_DIR, 0o755);
+                const threads = String(GLib.get_num_processors());
+                const proc = Gio.Subprocess.new(
+                    ['magick', '-limit', 'thread', threads, picturePath, '-blur', `0x${sigma}`, cachedPath],
+                    Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
+                );
+                await new Promise((resolve, reject) => {
+                    proc.wait_async(null, (self, result) => {
+                        try {
+                            self.wait_finish(result);
+                            resolve();
+                        } catch (e) {
+                            reject(e);
+                        }
+                    });
+                });
+                if (!this._isEnabled || !this._bgSettings) return;
+                if (!proc.get_successful()) return;
+            }
+
+            const blurredUri = cacheFile.get_uri();
 
             // Preserve originals before first overwrite
             if (!this._originalUri) {
@@ -92,7 +114,7 @@ export default class BlurWallpaperExtension extends Extension {
         this._settingBlur = false;
         this._originalUri = null;
         this._originalUriDark = null;
-        try { Gio.File.new_for_path(BLURRED_PATH).delete(null); } catch (_) { }
+        // Cached files are intentionally kept in CACHE_DIR for reuse.
     }
 
     // ── Init ──────────────────────────────────────────────────────────────────
