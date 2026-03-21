@@ -117,43 +117,51 @@ export default class BlurWallpaperExtension extends Extension {
         // Cached files are intentionally kept in CACHE_DIR for reuse.
     }
 
+    _isManagedBlurUri(uri) {
+        if (!uri || !this._cacheDirUri)
+            return false;
+        return uri.startsWith(`${this._cacheDirUri}/`);
+    }
+
+    _onBackgroundChanged() {
+        if (this._settingBlur || !this._bgSettings)
+            return;
+
+        const currentUri = this._bgSettings.get_string('picture-uri');
+        const currentUriDark = this._bgSettings.get_string('picture-uri-dark');
+
+        const nextSourceUri = this._isManagedBlurUri(currentUri)
+            ? this._sourceUri
+            : currentUri;
+        const nextSourceUriDark = this._isManagedBlurUri(currentUriDark)
+            ? this._sourceUriDark
+            : currentUriDark;
+
+        if (nextSourceUri === this._sourceUri && nextSourceUriDark === this._sourceUriDark)
+            return;
+
+        this._sourceUri = nextSourceUri;
+        this._sourceUriDark = nextSourceUriDark;
+        this._originalUri = this._sourceUri;
+        this._originalUriDark = this._sourceUriDark;
+
+        this._generateAndApplyBlurredWallpaper();
+    }
+
     // ── Init ──────────────────────────────────────────────────────────────────
 
     _initBlur() {
         this._blurRadius = this._settings?.get_int('intensity') ?? 0;
         this._applying = false;
         this._settingBlur = false;
+        this._cacheDirUri = Gio.File.new_for_path(CACHE_DIR).get_uri();
         this._sourceUri = this._bgSettings.get_string('picture-uri');
         this._sourceUriDark = this._bgSettings.get_string('picture-uri-dark');
         this._originalUri = this._sourceUri;
         this._originalUriDark = this._sourceUriDark;
 
-        this._bgSettings.connectObject('changed::picture-uri', () => {
-            if (!this._settingBlur) {
-                const nextSourceUri = this._bgSettings.get_string('picture-uri');
-                const nextSourceUriDark = this._bgSettings.get_string('picture-uri-dark');
-                if (nextSourceUri === this._sourceUri && nextSourceUriDark === this._sourceUriDark)
-                    return;
-                this._sourceUri = nextSourceUri;
-                this._sourceUriDark = nextSourceUriDark;
-                this._originalUri = this._sourceUri;
-                this._originalUriDark = this._sourceUriDark;
-                this._generateAndApplyBlurredWallpaper();
-            }
-        }, this);
-        this._bgSettings.connectObject('changed::picture-uri-dark', () => {
-            if (!this._settingBlur) {
-                const nextSourceUri = this._bgSettings.get_string('picture-uri');
-                const nextSourceUriDark = this._bgSettings.get_string('picture-uri-dark');
-                if (nextSourceUri === this._sourceUri && nextSourceUriDark === this._sourceUriDark)
-                    return;
-                this._sourceUri = nextSourceUri;
-                this._sourceUriDark = nextSourceUriDark;
-                this._originalUri = this._sourceUri;
-                this._originalUriDark = this._sourceUriDark;
-                this._generateAndApplyBlurredWallpaper();
-            }
-        }, this);
+        this._bgSettings.connectObject('changed::picture-uri', () => this._onBackgroundChanged(), this);
+        this._bgSettings.connectObject('changed::picture-uri-dark', () => this._onBackgroundChanged(), this);
         this._generateAndApplyBlurredWallpaper();
     }
 
@@ -184,5 +192,6 @@ export default class BlurWallpaperExtension extends Extension {
         this._blurRadius = null;
         this._sourceUri = null;
         this._sourceUriDark = null;
+        this._cacheDirUri = null;
     }
 }
