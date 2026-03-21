@@ -1,0 +1,16 @@
+{
+	"shell-version": [
+		"46",
+		"47",
+		"48",
+		"49"
+	],
+	"uuid": "blur-wall@digitalspace.name",
+	"name": "Blur wallpaper with adjustable intensity.",
+	"description": "Creates a static blurred copy of your current desktop wallpaper for better performance and artifact-free workspace switching. Set intensity from 0 to 300 and wait a moment. Note: ImageMagick (the `magick` command) must be installed.",
+	"url": "https://github.com/tomasmark79/blur-wallpaper",
+	"settings-schema": "org.gnome.shell.extensions.blur-wallpaper",
+	"donations": {
+		"paypal": "TomasMark"
+	}
+}
