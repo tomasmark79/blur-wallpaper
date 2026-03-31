@@ -31,16 +31,63 @@ export default class BlurWallpaperExtension extends Extension {
     // org.gnome.desktop.background – no GPU effect on the background group,
     // so workspace transitions never touch the blur at all.
 
+    // Returns the URI of the blurred cached image, or null on failure.
+    async _blurImage(pictureUri, sigma) {
+        if (!pictureUri) return null;
+
+        const picturePath = Gio.File.new_for_uri(pictureUri).get_path();
+        if (!picturePath) return null;
+
+        // ── Cache lookup ─────────────────────────────────────────────────
+        const cacheKey = GLib.compute_checksum_for_string(
+            GLib.ChecksumType.SHA256, `${picturePath}:${sigma}`, -1
+        );
+        const cachedPath = GLib.build_filenamev([CACHE_DIR, `${cacheKey}.jpg`]);
+        const cacheFile  = Gio.File.new_for_path(cachedPath);
+
+        let cacheHit = false;
+        if (cacheFile.query_exists(null)) {
+            try {
+                const ci = cacheFile.query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+                const si = Gio.File.new_for_path(picturePath)
+                              .query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+                cacheHit = ci.get_attribute_uint64('time::modified') >=
+                           si.get_attribute_uint64('time::modified');
+            } catch (_) { }
+        }
+
+        if (!cacheHit) {
+            GLib.mkdir_with_parents(CACHE_DIR, 0o755);
+            const threads = String(GLib.get_num_processors());
+            const proc = Gio.Subprocess.new(
+                ['magick', '-limit', 'thread', threads, picturePath, '-blur', `0x${sigma}`, cachedPath],
+                Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
+            );
+            await new Promise((resolve, reject) => {
+                proc.wait_async(null, (self, result) => {
+                    try {
+                        self.wait_finish(result);
+                        resolve();
+                    } catch (e) {
+                        reject(e);
+                    }
+                });
+            });
+            if (!this._isEnabled || !this._bgSettings) return null;
+            if (!proc.get_successful()) return null;
+        }
+
+        return cacheFile.get_uri();
+    }
+
     async _generateAndApplyBlurredWallpaper() {
         if (!this._isEnabled || this._applying || !this._bgSettings) return;
         this._applying = true;
 
         try {
-            const pictureUri = this._sourceUri ?? this._bgSettings.get_string('picture-uri');
-            if (!pictureUri) return;
-
-            const picturePath = Gio.File.new_for_uri(pictureUri).get_path();
-            if (!picturePath) return;
+            const sourceUri     = this._sourceUri     ?? this._bgSettings.get_string('picture-uri');
+            const sourceUriDark = this._sourceUriDark ?? this._bgSettings.get_string('picture-uri-dark');
+            if (!sourceUri) return;
 
             const sigma = Math.round(this._blurRadius);
             if (sigma <= 0) {
@@ -48,56 +95,26 @@ export default class BlurWallpaperExtension extends Extension {
                 return;
             }
 
-            // ── Cache lookup ─────────────────────────────────────────────────
-            const cacheKey = GLib.compute_checksum_for_string(
-                GLib.ChecksumType.SHA256, `${picturePath}:${sigma}`, -1
-            );
-            const cachedPath = GLib.build_filenamev([CACHE_DIR, `${cacheKey}.jpg`]);
-            const cacheFile  = Gio.File.new_for_path(cachedPath);
+            // Blur light wallpaper
+            const blurredUri = await this._blurImage(sourceUri, sigma);
+            if (!blurredUri) return;
 
-            let cacheHit = false;
-            if (cacheFile.query_exists(null)) {
-                try {
-                    const ci = cacheFile.query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
-                    const si = Gio.File.new_for_path(picturePath)
-                                  .query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
-                    cacheHit = ci.get_attribute_uint64('time::modified') >=
-                               si.get_attribute_uint64('time::modified');
-                } catch (_) { }
+            // Blur dark wallpaper separately when it differs from the light one;
+            // otherwise reuse the already-blurred light image.
+            let blurredUriDark = blurredUri;
+            if (sourceUriDark && sourceUriDark !== sourceUri) {
+                blurredUriDark = (await this._blurImage(sourceUriDark, sigma)) ?? blurredUri;
             }
-
-            if (!cacheHit) {
-                GLib.mkdir_with_parents(CACHE_DIR, 0o755);
-                const threads = String(GLib.get_num_processors());
-                const proc = Gio.Subprocess.new(
-                    ['magick', '-limit', 'thread', threads, picturePath, '-blur', `0x${sigma}`, cachedPath],
-                    Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
-                );
-                await new Promise((resolve, reject) => {
-                    proc.wait_async(null, (self, result) => {
-                        try {
-                            self.wait_finish(result);
-                            resolve();
-                        } catch (e) {
-                            reject(e);
-                        }
-                    });
-                });
-                if (!this._isEnabled || !this._bgSettings) return;
-                if (!proc.get_successful()) return;
-            }
-
-            const blurredUri = cacheFile.get_uri();
 
             // Preserve originals before first overwrite
             if (!this._originalUri) {
-                this._originalUri = this._sourceUri ?? this._bgSettings.get_string('picture-uri');
-                this._originalUriDark = this._sourceUriDark ?? this._bgSettings.get_string('picture-uri-dark');
+                this._originalUri     = sourceUri;
+                this._originalUriDark = sourceUriDark || sourceUri;
             }
 
             this._settingBlur = true;
-            this._bgSettings.set_string('picture-uri', blurredUri);
-            this._bgSettings.set_string('picture-uri-dark', blurredUri);
+            this._bgSettings.set_string('picture-uri',      blurredUri);
+            this._bgSettings.set_string('picture-uri-dark', blurredUriDark);
             this._settingBlur = false;
         } catch (e) {
             console.error(`BlurWallpaper: convert failed – ${e.message}`);
