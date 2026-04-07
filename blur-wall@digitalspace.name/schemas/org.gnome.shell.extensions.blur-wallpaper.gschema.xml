@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+    <schema path="/org/gnome/shell/extensions/blur-wallpaper/" id="org.gnome.shell.extensions.blur-wallpaper">
+        <key type="i" name="intensity">
+            <default>120</default>
+            <range min="0" max="300"/>
+            <summary>Intensity (px)</summary>
+        </key>
+    </schema>
+</schemalist>
