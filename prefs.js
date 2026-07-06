@@ -24,30 +24,17 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 
 export default class BlurWallpaperPreferences extends ExtensionPreferences {
     _getBlurRadiusBounds(settings) {
-        const fallback = { min: 0, max: 300, def: 120 };
+        const range = settings.settings_schema.get_key('intensity').get_range().deepUnpack();
+        const defaultValue = settings.get_default_value('intensity').deepUnpack();
+        const unpacked = Array.isArray(range[1])
+            ? range[1]
+            : range[1].deepUnpack();
 
-        try {
-            const range = settings.settings_schema.get_key('intensity').get_range().deepUnpack();
-            const defaultValue = settings.get_default_value('intensity').deepUnpack();
-
-            if (!Array.isArray(range) || range.length < 2)
-                return fallback;
-
-            const unpacked = Array.isArray(range[1])
-                ? range[1]
-                : range[1]?.deepUnpack?.() ?? [];
-
-            if (!Array.isArray(unpacked) || unpacked.length < 2)
-                return fallback;
-
-            return {
-                min: Number(unpacked[0]),
-                max: Number(unpacked[1]),
-                def: Number(defaultValue),
-            };
-        } catch (_) {
-            return fallback;
-        }
+        return {
+            min: Number(unpacked[0]),
+            max: Number(unpacked[1]),
+            def: Number(defaultValue),
+        };
     }
 
     fillPreferencesWindow(window) {

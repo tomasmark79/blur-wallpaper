@@ -47,13 +47,11 @@ export default class BlurWallpaperExtension extends Extension {
 
         let cacheHit = false;
         if (cacheFile.query_exists(null)) {
-            try {
-                const ci = cacheFile.query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
-                const si = Gio.File.new_for_path(picturePath)
-                              .query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
-                cacheHit = ci.get_attribute_uint64('time::modified') >=
-                           si.get_attribute_uint64('time::modified');
-            } catch (_) { }
+            const ci = cacheFile.query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+            const si = Gio.File.new_for_path(picturePath)
+                          .query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+            cacheHit = ci.get_attribute_uint64('time::modified') >=
+                       si.get_attribute_uint64('time::modified');
         }
 
         if (!cacheHit) {
@@ -73,7 +71,7 @@ export default class BlurWallpaperExtension extends Extension {
                     }
                 });
             });
-            if (!this._isEnabled || !this._bgSettings) return null;
+            if (!this._bgSettings) return null;
             if (!proc.get_successful()) return null;
         }
 
@@ -92,8 +90,7 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     _isCurrentBlurJob(generation, sourceUri, sourceUriDark, sigma) {
-        return this._isEnabled &&
-            this._bgSettings &&
+        return this._bgSettings &&
             generation === this._generation &&
             sourceUri === this._sourceUri &&
             sourceUriDark === this._sourceUriDark &&
@@ -101,7 +98,7 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     async _generateAndApplyBlurredWallpaper(generation) {
-        if (!this._isEnabled || this._applying || !this._bgSettings) return;
+        if (this._applying || !this._bgSettings) return;
         this._applying = true;
 
         try {
@@ -135,17 +132,15 @@ export default class BlurWallpaperExtension extends Extension {
             }
 
             this._settingBlur = true;
-            try {
-                this._bgSettings.set_string('picture-uri',      blurredUri);
-                this._bgSettings.set_string('picture-uri-dark', blurredUriDark);
-            } finally {
-                this._settingBlur = false;
-            }
+            this._bgSettings.set_string('picture-uri',      blurredUri);
+            this._bgSettings.set_string('picture-uri-dark', blurredUriDark);
+            this._settingBlur = false;
         } catch (e) {
             console.error(`BlurWallpaper: convert failed – ${e.message}`);
         } finally {
+            this._settingBlur = false;
             this._applying = false;
-            if (this._pendingApply && this._isEnabled && this._bgSettings) {
+            if (this._pendingApply && this._bgSettings) {
                 this._pendingApply = false;
                 this._generateAndApplyBlurredWallpaper(this._generation);
             }
@@ -153,14 +148,11 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     _restoreWallpaper() {
-        if (!this._originalUri) return;
+        if (!this._originalUri || !this._bgSettings) return;
         this._settingBlur = true;
-        try {
-            this._bgSettings.set_string('picture-uri', this._originalUri);
-            this._bgSettings.set_string('picture-uri-dark', this._originalUriDark ?? this._originalUri);
-        } finally {
-            this._settingBlur = false;
-        }
+        this._bgSettings.set_string('picture-uri', this._originalUri);
+        this._bgSettings.set_string('picture-uri-dark', this._originalUriDark ?? this._originalUri);
+        this._settingBlur = false;
         this._originalUri = null;
         this._originalUriDark = null;
         // Cached files are intentionally kept in CACHE_DIR for reuse.
@@ -224,7 +216,6 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     enable() {
-        this._isEnabled = true;
         this._settings = this.getSettings();
         this._bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
         this._initBlur();
@@ -233,7 +224,6 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     disable() {
-        this._isEnabled = false;
         this._settings?.disconnectObject(this);
         this._bgSettings?.disconnectObject(this);
         this._settings = null;
