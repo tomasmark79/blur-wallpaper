@@ -28,7 +28,19 @@ Local installation also requires `gnome-extensions`.
 
 ## Installation
 
-From the project directory:
+Install from [GNOME Extensions](https://extensions.gnome.org/extension/9556/blur-wallpaper-with-adjustable-intensity/)
+or [download the latest GitHub build](https://github.com/tomasmark79/blur-wallpaper/releases/download/github-build/blur-wall%40digitalspace.name.zip).
+The GitHub ZIP is built automatically from `main` and may be newer than the version
+reviewed on GNOME Extensions. Its [release page](https://github.com/tomasmark79/blur-wallpaper/releases/tag/github-build)
+lists the source commit, build date, declared Shell compatibility and SHA-256 checksums.
+
+Install the downloaded ZIP:
+
+```bash
+gnome-extensions install --force ~/Downloads/blur-wall@digitalspace.name.zip
+```
+
+Or build and install from the project directory:
 
 ```bash
 ./build.sh --install
@@ -69,6 +81,12 @@ Generated wallpapers are cached in `~/.cache/blur-wallpaper` for reuse.
 node --test tests/overview.test.cjs
 ./build.sh
 ```
+
+Each push to `main` runs the Overview tests and the same build in GitHub Actions,
+then updates the **Latest GitHub build** release after all checks pass. The rolling
+`github-build` tag follows the published commit; the version in `metadata.json`
+is left unchanged. The workflow uses the built-in GitHub token and needs no
+additional secrets.
 
 The output is `dist/blur-wall@digitalspace.name.zip`. `-b` and `-r` are build aliases;
 `-i`, `-bi` and `-ri` build the current sources and install them.
