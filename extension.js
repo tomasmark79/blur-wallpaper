@@ -140,6 +140,16 @@ export default class BlurWallpaperExtension extends Extension {
             sigma === Math.round(this._blurRadius);
     }
 
+    async _blurWallpaperVariant(uri, sigma) {
+        if (!uri) return uri;
+        try {
+            return (await this._blurImage(uri, sigma)) ?? uri;
+        } catch (e) {
+            console.error(`BlurWallpaper: wallpaper variant failed – ${e.message}`);
+            return uri;
+        }
+    }
+
     async _generateAndApplyBlurredWallpaper(generation) {
         if (this._applying || !this._bgSettings) return;
         this._applying = true;
@@ -148,8 +158,6 @@ export default class BlurWallpaperExtension extends Extension {
         try {
             const sourceUri     = this._sourceUri     ?? this._bgSettings.get_string('picture-uri');
             const sourceUriDark = this._sourceUriDark ?? this._bgSettings.get_string('picture-uri-dark');
-            if (!sourceUri) return;
-
             const sigma = Math.round(this._blurRadius);
             if (sigma <= 0) {
                 this._restoreWallpaper();
@@ -157,22 +165,21 @@ export default class BlurWallpaperExtension extends Extension {
             }
 
             // Blur light wallpaper
-            const blurredUri = await this._blurImage(sourceUri, sigma);
+            const blurredUri = await this._blurWallpaperVariant(sourceUri, sigma);
             if (!this._isCurrentBlurJob(generation, sourceUri, sourceUriDark, sigma)) return;
-            if (!blurredUri) return;
 
-            // Blur dark wallpaper separately when it differs from the light one;
-            // otherwise reuse the already-blurred light image.
+            // Keep the two GNOME wallpaper settings independent, even when one
+            // is empty or cannot be converted. Never substitute the other image.
             let blurredUriDark = blurredUri;
-            if (sourceUriDark && sourceUriDark !== sourceUri) {
-                blurredUriDark = (await this._blurImage(sourceUriDark, sigma)) ?? blurredUri;
+            if (sourceUriDark !== sourceUri) {
+                blurredUriDark = await this._blurWallpaperVariant(sourceUriDark, sigma);
                 if (!this._isCurrentBlurJob(generation, sourceUri, sourceUriDark, sigma)) return;
             }
 
             // Preserve originals before first overwrite
-            if (!this._originalUri) {
+            if (this._originalUri == null) {
                 this._originalUri     = sourceUri;
-                this._originalUriDark = sourceUriDark || sourceUri;
+                this._originalUriDark = sourceUriDark;
             }
 
             this._settingBlur = true;
@@ -194,7 +201,7 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     _restoreWallpaper() {
-        if (!this._originalUri || !this._bgSettings) return;
+        if (this._originalUri == null || !this._bgSettings) return;
         this._settingBlur = true;
         this._bgSettings.set_string('picture-uri', this._originalUri);
         this._bgSettings.set_string('picture-uri-dark', this._originalUriDark ?? this._originalUri);
@@ -297,7 +304,7 @@ export default class BlurWallpaperExtension extends Extension {
         const sigma = this._settings.get_int('overview-intensity');
         try {
             const uri = sigma > 0 && sourceUri
-                ? await this._blurImage(sourceUri, sigma)
+                ? await this._blurWallpaperVariant(sourceUri, sigma)
                 : sourceUri;
             if (generation !== this._overviewGeneration || !this._bgSettings)
                 return;

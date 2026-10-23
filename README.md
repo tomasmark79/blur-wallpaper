@@ -56,6 +56,10 @@ Set intensity to `0` to use the original wallpaper without blur.
 Under **Overview**, enable **Use current wallpaper** to show it behind the
 Activities overview, then choose its separate intensity (also `0`–`300` px).
 This option is off by default and follows light/dark wallpaper changes.
+Choose **Default Image** and **Dark Style Image** in GNOME Tweaks to use a
+different wallpaper for each appearance. The extension processes both separately;
+Overview follows the active appearance automatically. If one image cannot be
+blurred, that variant keeps its original wallpaper.
 Generated wallpapers are cached in `~/.cache/blur-wallpaper` for reuse.
 
 ## Development

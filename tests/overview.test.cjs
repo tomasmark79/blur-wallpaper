@@ -78,6 +78,60 @@ function fixture({desktop = 0, overview = true, intensity = 30} = {}) {
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('failed conversions keep each appearance independent on desktop and overview', async () => {
+    for (const failed of ['light', 'dark']) {
+        const f = fixture({overview: false});
+        f.extension._createBlurredImage = async uri => uri.includes(failed)
+            ? null : `file:///cache/blurred-${uri.split('/').pop()}`;
+        f.settings.set('intensity', 120);
+        await tick();
+        assert.equal(f.bg.get_string('picture-uri'), failed === 'light'
+            ? 'file:///light.jpg' : 'file:///cache/blurred-light.jpg');
+        assert.equal(f.bg.get_string('picture-uri-dark'), failed === 'dark'
+            ? 'file:///dark.jpg' : 'file:///cache/blurred-dark.jpg');
+        f.settings.set('overview-wallpaper', true);
+        await tick();
+        f.iface.set('color-scheme', 'prefer-dark');
+        await tick();
+        assert.equal(f.extension._overviewBackground.uri, failed === 'dark'
+            ? 'file:///dark.jpg' : 'file:///cache/blurred-dark.jpg');
+        f.extension.disable();
+        assert.equal(f.bg.get_string('picture-uri'), 'file:///light.jpg');
+        assert.equal(f.bg.get_string('picture-uri-dark'), 'file:///dark.jpg');
+    }
+});
+
+test('empty wallpaper variants are preserved and do not block the other image', async () => {
+    for (const emptyKey of ['picture-uri', 'picture-uri-dark']) {
+        const f = fixture({overview: false});
+        f.bg.set(emptyKey, '');
+        f.extension._createBlurredImage = async uri => `file:///cache/blurred-${uri.split('/').pop()}`;
+        f.settings.set('intensity', 120);
+        await tick();
+        assert.equal(f.bg.get_string(emptyKey), '');
+        const otherKey = emptyKey === 'picture-uri' ? 'picture-uri-dark' : 'picture-uri';
+        assert.match(f.bg.get_string(otherKey), /cache\/blurred-/);
+        f.extension.disable();
+        assert.equal(f.bg.get_string(emptyKey), '');
+        assert.equal(f.bg.get_string(otherKey), otherKey === 'picture-uri'
+            ? 'file:///light.jpg' : 'file:///dark.jpg');
+    }
+});
+
+test('changing only the dark wallpaper preserves the light source and restores both', async () => {
+    const f = fixture({overview: false});
+    f.extension._createBlurredImage = async uri => `file:///cache/blur-wallpaper/blurred-${uri.split('/').pop()}`;
+    f.settings.set('intensity', 120);
+    await tick();
+    f.bg.set('picture-uri-dark', 'file:///new-dark.jpg');
+    await tick();
+    assert.equal(f.bg.get_string('picture-uri'), 'file:///cache/blur-wallpaper/blurred-light.jpg');
+    assert.equal(f.bg.get_string('picture-uri-dark'), 'file:///cache/blur-wallpaper/blurred-new-dark.jpg');
+    f.extension.disable();
+    assert.equal(f.bg.get_string('picture-uri'), 'file:///light.jpg');
+    assert.equal(f.bg.get_string('picture-uri-dark'), 'file:///new-dark.jpg');
+});
+
 test('disable stops conversions, cancels waits and clears job ownership', async () => {
     const f = fixture({overview: false});
     const {Gio, GLib} = f.context;
