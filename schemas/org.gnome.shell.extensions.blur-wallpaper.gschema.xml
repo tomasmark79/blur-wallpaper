@@ -6,5 +6,14 @@
             <range min="0" max="300"/>
             <summary>Intensity (px)</summary>
         </key>
+        <key type="b" name="overview-wallpaper">
+            <default>false</default>
+            <summary>Use the current wallpaper in the Activities overview</summary>
+        </key>
+        <key type="i" name="overview-intensity">
+            <default>120</default>
+            <range min="0" max="300"/>
+            <summary>Overview blur intensity (px)</summary>
+        </key>
     </schema>
 </schemalist>

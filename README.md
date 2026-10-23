@@ -1,16 +1,22 @@
 # Blur Wallpaper
 
-Creates a static blurred copy of your GNOME wallpaper for smooth workspace
-transitions without a permanent GPU blur effect.
+**Your wallpaper. Two views. Just the right blur.**
+
+Give your GNOME desktop a softer backdrop and bring the same wallpaper into the
+Activities overview. Adjust each blur independently: a deeply blurred desktop,
+a sharper Overview, or whatever balance feels right.
+
+Blur is baked into cached images, so your wallpaper needs no live GPU blur effect.
+
+<img src="blur-wall.jpg" alt="Blur Wallpaper preview" width="50%">
 
 ## Features
 
-- Adjustable blur intensity from 0 to 300 px
-- Separate processing of light and dark wallpapers
-- Automatic refresh when the wallpaper changes
-- Cached generated images for faster reuse
-- Restores the original wallpaper when disabled
-- Preferences integrated with GNOME Extensions
+- **Two independent controls** — set desktop and Overview blur from 0 to 300 px.
+- **Your wallpaper in Overview** — enable it with a switch; use 0 for a sharp backdrop.
+- **Light and dark support** — follows your wallpaper and appearance changes.
+- **Blur once, reuse later** — cached images avoid recalculating the same blur.
+- **Easy to undo** — disabling the extension restores your original wallpaper.
 
 ## Requirements
 
@@ -47,12 +53,16 @@ gnome-extensions prefs blur-wall@digitalspace.name
 
 Choose a blur intensity and allow a moment for the image to be generated.
 Set intensity to `0` to use the original wallpaper without blur.
+Under **Overview**, enable **Use current wallpaper** to show it behind the
+Activities overview, then choose its separate intensity (also `0`–`300` px).
+This option is off by default and follows light/dark wallpaper changes.
 Generated wallpapers are cached in `~/.cache/blur-wallpaper` for reuse.
 
 ## Development
 
 ```bash
 ./build.sh --check
+node --test tests/overview.test.cjs
 ./build.sh
 ```
 
@@ -72,6 +82,8 @@ The schema is validated during the build and compiled by GNOME during installati
 
 For runtime changes, verify intensity `0` and nonzero values, light/dark wallpapers,
 wallpaper changes, cached image reuse and restoration after disabling.
+Also verify the overview toggle, independent intensity (including `0`), theme
+changes, monitor changes and disabling while an image is being generated.
 Build checks alone do not confirm behavior on every declared Shell version.
 
 ## Troubleshooting

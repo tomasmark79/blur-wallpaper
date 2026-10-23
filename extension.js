@@ -17,6 +17,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import Clutter from 'gi://Clutter';
+import Cogl from 'gi://Cogl';
+import Meta from 'gi://Meta';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const CACHE_DIR = GLib.build_filenamev([GLib.get_user_cache_dir(), 'blur-wallpaper']);
@@ -33,6 +37,22 @@ export default class BlurWallpaperExtension extends Extension {
 
     // Returns the URI of the blurred cached image, or null on failure.
     async _blurImage(pictureUri, sigma) {
+        const jobs = this._blurJobs;
+        if (!jobs) return null;
+        const key = `${pictureUri}:${sigma}`;
+        if (jobs.has(key))
+            return jobs.get(key);
+
+        const job = this._createBlurredImage(pictureUri, sigma);
+        jobs.set(key, job);
+        try {
+            return await job;
+        } finally {
+            jobs.delete(key);
+        }
+    }
+
+    async _createBlurredImage(pictureUri, sigma) {
         if (!pictureUri) return null;
 
         const picturePath = Gio.File.new_for_uri(pictureUri).get_path();
@@ -57,29 +77,52 @@ export default class BlurWallpaperExtension extends Extension {
         if (!cacheHit) {
             GLib.mkdir_with_parents(CACHE_DIR, 0o755);
             const threads = String(GLib.get_num_processors());
+            // Publish only complete images; interrupted conversions must never
+            // become cache hits, including across a quick disable/enable cycle.
+            const temporaryPath = `${cachedPath}.${GLib.uuid_string_random()}.jpg`;
+            const temporaryFile = Gio.File.new_for_path(temporaryPath);
             const proc = Gio.Subprocess.new(
-                ['magick', '-limit', 'thread', threads, picturePath, '-blur', `0x${sigma}`, cachedPath],
+                ['magick', '-limit', 'thread', threads, picturePath, '-blur', `0x${sigma}`, temporaryPath],
                 Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
             );
-            await new Promise((resolve, reject) => {
-                proc.wait_async(null, (self, result) => {
-                    try {
-                        self.wait_finish(result);
-                        resolve();
-                    } catch (e) {
-                        reject(e);
-                    }
+            const cancellable = new Gio.Cancellable();
+            const processes = this._blurProcesses;
+            const task = {proc, cancellable};
+            processes.add(task);
+            try {
+                await new Promise((resolve, reject) => {
+                    proc.wait_async(cancellable, (self, result) => {
+                        try {
+                            self.wait_finish(result);
+                            resolve();
+                        } catch (e) {
+                            reject(e);
+                        }
+                    });
                 });
-            });
-            if (!this._bgSettings) return null;
-            if (!proc.get_successful()) return null;
+                if (cancellable.is_cancelled() || !proc.get_successful()) return null;
+                temporaryFile.move(cacheFile, Gio.FileCopyFlags.OVERWRITE, null, null);
+            } catch (e) {
+                if (!cancellable.is_cancelled()) throw e;
+                return null;
+            } finally {
+                processes.delete(task);
+                // On cancellation the child may still be exiting. Its unique
+                // temporary path is never reused or considered a cached image.
+                try {
+                    temporaryFile.delete(null);
+                } catch (e) {
+                    if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
+                        console.error(`BlurWallpaper: temporary image cleanup failed – ${e.message}`);
+                }
+            }
         }
 
         return cacheFile.get_uri();
     }
 
     _requestBlurUpdate() {
-        this._generation = (this._generation ?? 0) + 1;
+        this._generation = Symbol();
 
         if (this._applying) {
             this._pendingApply = true;
@@ -100,6 +143,7 @@ export default class BlurWallpaperExtension extends Extension {
     async _generateAndApplyBlurredWallpaper(generation) {
         if (this._applying || !this._bgSettings) return;
         this._applying = true;
+        const bgSettings = this._bgSettings;
 
         try {
             const sourceUri     = this._sourceUri     ?? this._bgSettings.get_string('picture-uri');
@@ -138,6 +182,8 @@ export default class BlurWallpaperExtension extends Extension {
         } catch (e) {
             console.error(`BlurWallpaper: convert failed – ${e.message}`);
         } finally {
+            if (this._bgSettings !== bgSettings)
+                return;
             this._settingBlur = false;
             this._applying = false;
             if (this._pendingApply && this._bgSettings) {
@@ -187,6 +233,88 @@ export default class BlurWallpaperExtension extends Extension {
         this._originalUriDark = this._sourceUriDark;
 
         this._requestBlurUpdate();
+        this._requestOverviewUpdate();
+    }
+
+    // The overview gets its own Meta.Background, so its image never changes
+    // the desktop background or the wallpaper shown inside workspace previews.
+    _clearOverviewBackgrounds() {
+        for (const actor of this._overviewActors ?? [])
+            actor.destroy();
+        this._overviewActors = [];
+        this._overviewBackground = null;
+    }
+
+    _showOverviewWallpaper(uri) {
+        const background = new Meta.Background({meta_display: global.display});
+        const Color = Clutter.Color ?? Cogl.Color;
+        const [, primary] = Color.from_string(this._bgSettings.get_string('primary-color'));
+        const [, secondary] = Color.from_string(this._bgSettings.get_string('secondary-color'));
+        const shading = this._bgSettings.get_enum('color-shading-type');
+        if (shading === 0)
+            background.set_color(primary);
+        else
+            background.set_gradient(shading, primary, secondary);
+        background.set_file(uri ? Gio.File.new_for_uri(uri) : null,
+            this._bgSettings.get_enum('picture-options'));
+
+        this._clearOverviewBackgrounds();
+        this._overviewBackground = background;
+        for (const monitor of Main.layoutManager.monitors) {
+            const actor = new Meta.BackgroundActor({
+                meta_display: global.display,
+                monitor: monitor.index,
+                reactive: false,
+            });
+            actor.content.background = background;
+            actor.set_position(monitor.x, monitor.y);
+            actor.set_size(monitor.width, monitor.height);
+            Main.layoutManager.overviewGroup.insert_child_at_index(actor, 0);
+            this._overviewActors.push(actor);
+        }
+    }
+
+    _requestOverviewUpdate() {
+        const generation = Symbol();
+        this._overviewGeneration = generation;
+        if (!this._settings?.get_boolean('overview-wallpaper')) {
+            this._clearOverviewBackgrounds();
+            return;
+        }
+
+        if (this._overviewApplying) {
+            this._overviewPending = true;
+            return;
+        }
+        this._generateOverviewWallpaper(generation);
+    }
+
+    async _generateOverviewWallpaper(generation) {
+        this._overviewApplying = true;
+        const bgSettings = this._bgSettings;
+        const dark = this._interfaceSettings.get_string('color-scheme') === 'prefer-dark';
+        const sourceUri = (dark ? this._sourceUriDark : null) || this._sourceUri;
+        const sigma = this._settings.get_int('overview-intensity');
+        try {
+            const uri = sigma > 0 && sourceUri
+                ? await this._blurImage(sourceUri, sigma)
+                : sourceUri;
+            if (generation !== this._overviewGeneration || !this._bgSettings)
+                return;
+            if (sourceUri && !uri)
+                return;
+            this._showOverviewWallpaper(uri);
+        } catch (e) {
+            console.error(`BlurWallpaper: overview wallpaper failed – ${e.message}`);
+        } finally {
+            if (this._bgSettings !== bgSettings)
+                return;
+            this._overviewApplying = false;
+            if (this._overviewPending) {
+                this._overviewPending = false;
+                this._requestOverviewUpdate();
+            }
+        }
     }
 
     // ── Init ──────────────────────────────────────────────────────────────────
@@ -195,7 +323,7 @@ export default class BlurWallpaperExtension extends Extension {
         this._blurRadius = this._settings?.get_int('intensity') ?? 0;
         this._applying = false;
         this._pendingApply = false;
-        this._generation = 0;
+        this._generation = null;
         this._settingBlur = false;
         this._cacheDirUri = Gio.File.new_for_path(CACHE_DIR).get_uri();
         this._sourceUri = this._bgSettings.get_string('picture-uri');
@@ -216,16 +344,43 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     enable() {
+        this._blurJobs = new Map();
+        this._blurProcesses = new Set();
         this._settings = this.getSettings();
         this._bgSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
+        this._interfaceSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
+        this._overviewApplying = false;
+        this._overviewPending = false;
         this._initBlur();
 
         this._settings?.connectObject('changed::intensity', () => this._refreshRadius(), this);
+        this._settings.connectObject(
+            'changed::overview-wallpaper', () => this._requestOverviewUpdate(),
+            'changed::overview-intensity', () => this._requestOverviewUpdate(), this);
+        this._interfaceSettings.connectObject('changed::color-scheme',
+            () => this._requestOverviewUpdate(), this);
+        for (const key of ['picture-options', 'primary-color', 'secondary-color', 'color-shading-type'])
+            this._bgSettings.connectObject(`changed::${key}`, () => this._requestOverviewUpdate(), this);
+        Main.layoutManager.connectObject('monitors-changed', () => this._requestOverviewUpdate(), this);
+        this._requestOverviewUpdate();
     }
 
     disable() {
+        for (const {proc, cancellable} of this._blurProcesses ?? []) {
+            proc.force_exit();
+            cancellable.cancel();
+        }
+        this._blurProcesses?.clear();
+        this._blurProcesses = null;
+        this._blurJobs?.clear();
+        this._blurJobs = null;
         this._settings?.disconnectObject(this);
         this._bgSettings?.disconnectObject(this);
+        this._interfaceSettings?.disconnectObject(this);
+        Main.layoutManager.disconnectObject(this);
+        this._interfaceSettings = null;
+        this._overviewGeneration = null;
+        this._clearOverviewBackgrounds();
         this._settings = null;
 
         this._restoreWallpaper();
@@ -234,7 +389,7 @@ export default class BlurWallpaperExtension extends Extension {
         this._sourceUri = null;
         this._sourceUriDark = null;
         this._cacheDirUri = null;
-        this._generation = 0;
+        this._generation = null;
         this._pendingApply = false;
     }
 }

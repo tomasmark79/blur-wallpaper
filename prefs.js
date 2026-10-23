@@ -23,9 +23,9 @@ import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/
 
 
 export default class BlurWallpaperPreferences extends ExtensionPreferences {
-    _getBlurRadiusBounds(settings) {
-        const range = settings.settings_schema.get_key('intensity').get_range().deepUnpack();
-        const defaultValue = settings.get_default_value('intensity').deepUnpack();
+    _getBlurRadiusBounds(settings, key = 'intensity') {
+        const range = settings.settings_schema.get_key(key).get_range().deepUnpack();
+        const defaultValue = settings.get_default_value(key).deepUnpack();
         const unpacked = Array.isArray(range[1])
             ? range[1]
             : range[1].deepUnpack();
@@ -47,7 +47,7 @@ export default class BlurWallpaperPreferences extends ExtensionPreferences {
         });
         window.add(page);
 
-        const group = new Adw.PreferencesGroup();
+        const group = new Adw.PreferencesGroup({title: 'Desktop'});
         page.add(group);
 
         const adjustmentRadius = new Gtk.Adjustment({
@@ -66,5 +66,29 @@ export default class BlurWallpaperPreferences extends ExtensionPreferences {
         group.add(blurRadius);
         window._settings.bind('intensity', blurRadius, 'value', Gio.SettingsBindFlags.DEFAULT);
 
+        const overviewGroup = new Adw.PreferencesGroup({title: 'Overview'});
+        page.add(overviewGroup);
+        const overviewWallpaper = new Adw.SwitchRow({
+            title: 'Use current wallpaper',
+            subtitle: 'Show the desktop wallpaper behind the Activities overview.',
+        });
+        overviewGroup.add(overviewWallpaper);
+        window._settings.bind('overview-wallpaper', overviewWallpaper, 'active', Gio.SettingsBindFlags.DEFAULT);
+
+        const overviewBounds = this._getBlurRadiusBounds(window._settings, 'overview-intensity');
+        const overviewRadius = new Adw.SpinRow({
+            title: 'Intensity (px)',
+            subtitle: 'Independent of desktop blur. 0 = no blur.',
+            adjustment: new Gtk.Adjustment({
+                lower: overviewBounds.min,
+                upper: overviewBounds.max,
+                value: overviewBounds.def,
+                step_increment: 1,
+                page_increment: 5,
+            }),
+        });
+        overviewGroup.add(overviewRadius);
+        window._settings.bind('overview-intensity', overviewRadius, 'value', Gio.SettingsBindFlags.DEFAULT);
+        window._settings.bind('overview-wallpaper', overviewRadius, 'sensitive', Gio.SettingsBindFlags.GET);
     }
 }
