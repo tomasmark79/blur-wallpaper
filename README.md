@@ -6,7 +6,7 @@ Give your GNOME desktop a softer backdrop and bring the same wallpaper into the
 Activities overview. Adjust each blur independently: a deeply blurred desktop,
 a sharper Overview, or whatever balance feels right.
 
-Blur is baked into cached images, so your wallpaper needs no live GPU blur effect.
+Blur is baked into cached images, so your wallpaper **needs no live GPU blur effect**.
 
 <img src="blur-wall.jpg" alt="Blur Wallpaper preview" width="50%">
 
