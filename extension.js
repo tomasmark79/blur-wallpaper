@@ -252,19 +252,96 @@ export default class BlurWallpaperExtension extends Extension {
         this._overviewBackground = null;
     }
 
-    _showOverviewWallpaper(uri) {
-        const background = new Meta.Background({meta_display: global.display});
-        const Color = Clutter.Color ?? Cogl.Color;
-        const [, primary] = Color.from_string(this._bgSettings.get_string('primary-color'));
-        const [, secondary] = Color.from_string(this._bgSettings.get_string('secondary-color'));
-        const shading = this._bgSettings.get_enum('color-shading-type');
-        if (shading === 0)
-            background.set_color(primary);
-        else
-            background.set_gradient(shading, primary, secondary);
-        background.set_file(uri ? Gio.File.new_for_uri(uri) : null,
-            this._bgSettings.get_enum('picture-options'));
+    _glyMemoryFormatToCogl(Glycin, format) {
+        const map = new Map([
+            [Glycin.MemoryFormat.B8G8R8A8_PREMULTIPLIED, Cogl.PixelFormat.BGRA_8888_PRE],
+            [Glycin.MemoryFormat.A8R8G8B8_PREMULTIPLIED, Cogl.PixelFormat.ARGB_8888_PRE],
+            [Glycin.MemoryFormat.R8G8B8A8_PREMULTIPLIED, Cogl.PixelFormat.RGBA_8888_PRE],
+            [Glycin.MemoryFormat.B8G8R8A8, Cogl.PixelFormat.BGRA_8888],
+            [Glycin.MemoryFormat.A8R8G8B8, Cogl.PixelFormat.ARGB_8888],
+            [Glycin.MemoryFormat.R8G8B8A8, Cogl.PixelFormat.RGBA_8888],
+            [Glycin.MemoryFormat.A8B8G8R8, Cogl.PixelFormat.ABGR_8888],
+            [Glycin.MemoryFormat.R8G8B8, Cogl.PixelFormat.RGB_888],
+            [Glycin.MemoryFormat.B8G8R8, Cogl.PixelFormat.BGR_888],
+            [Glycin.MemoryFormat.R16G16B16A16_PREMULTIPLIED, Cogl.PixelFormat.RGBA_16161616_PRE],
+            [Glycin.MemoryFormat.R16G16B16A16, Cogl.PixelFormat.RGBA_16161616],
+            [Glycin.MemoryFormat.R16G16B16A16_FLOAT, Cogl.PixelFormat.RGBA_FP_16161616],
+            [Glycin.MemoryFormat.R32G32B32A32_FLOAT_PREMULTIPLIED, Cogl.PixelFormat.RGBA_FP_32323232_PRE],
+            [Glycin.MemoryFormat.R32G32B32A32_FLOAT, Cogl.PixelFormat.RGBA_FP_32323232],
+        ]);
+        const coglFormat = map.get(format);
+        if (coglFormat === undefined)
+            throw new Error(`Unsupported glycin memory format: ${format}`);
+        return coglFormat;
+    }
 
+    async _loadBackgroundTexture(file) {
+        const {default: Glycin} = await import('gi://Glycin');
+        const stream = await file.read_async(GLib.PRIORITY_DEFAULT, null);
+        const loader = Glycin.Loader.new_for_stream(stream);
+        loader.set_accepted_memory_formats(
+            Glycin.MemoryFormatSelection.B8G8R8A8_PREMULTIPLIED |
+            Glycin.MemoryFormatSelection.A8R8G8B8_PREMULTIPLIED |
+            Glycin.MemoryFormatSelection.R8G8B8A8_PREMULTIPLIED |
+            Glycin.MemoryFormatSelection.B8G8R8A8 |
+            Glycin.MemoryFormatSelection.A8R8G8B8 |
+            Glycin.MemoryFormatSelection.R8G8B8A8 |
+            Glycin.MemoryFormatSelection.A8B8G8R8 |
+            Glycin.MemoryFormatSelection.R8G8B8 |
+            Glycin.MemoryFormatSelection.B8G8R8 |
+            Glycin.MemoryFormatSelection.R16G16B16A16_PREMULTIPLIED |
+            Glycin.MemoryFormatSelection.R16G16B16A16 |
+            Glycin.MemoryFormatSelection.R16G16B16A16_FLOAT |
+            Glycin.MemoryFormatSelection.R32G32B32A32_FLOAT_PREMULTIPLIED |
+            Glycin.MemoryFormatSelection.R32G32B32A32_FLOAT
+        );
+        const image = loader.load();
+        const frame = image.next_frame();
+
+        const width = frame.get_width();
+        const height = frame.get_height();
+        const stride = frame.get_stride();
+        const data = frame.get_buf_bytes().get_data();
+        const format = frame.get_memory_format();
+        const coglFormat = this._glyMemoryFormatToCogl(Glycin, format);
+
+        const clutterContext = global.stage.context;
+        const ctx = clutterContext.get_backend().get_cogl_context();
+        const components = Glycin.memory_format_has_alpha(format)
+            ? Cogl.TextureComponents.RGBA
+            : Cogl.TextureComponents.RGB;
+
+        let texture = Cogl.Texture2D.new_with_size(ctx, width, height);
+        texture.set_components(components);
+        try {
+            texture.allocate();
+        } catch {
+            texture = Cogl.Texture2DSliced.new_with_size(ctx, width, height, Cogl.TEXTURE_MAX_WASTE);
+            texture.set_components(components);
+        }
+        if (!texture.set_data(coglFormat, stride, data, 0))
+            throw new Error('Failed to set texture data');
+
+        let colorState = null;
+        const cicp = frame.get_color_cicp();
+        if (cicp) {
+            const clutterCicp = new Clutter.Cicp({
+                primaries: cicp.color_primaries,
+                transfer: cicp.transfer_characteristics,
+                matrix_coefficients: cicp.matrix_coefficients,
+                video_full_range_flag: cicp.video_full_range_flag,
+            });
+            try {
+                colorState = Clutter.ColorStateParams.new_from_cicp(clutterContext, clutterCicp);
+            } catch (e) {
+                console.error(`BlurWallpaper: failed to create color state – ${e.message}`);
+            }
+        }
+
+        return {texture, colorState};
+    }
+
+    _applyOverviewBackground(background) {
         this._clearOverviewBackgrounds();
         this._overviewBackground = background;
         for (const monitor of Main.layoutManager.monitors) {
@@ -279,6 +356,39 @@ export default class BlurWallpaperExtension extends Extension {
             Main.layoutManager.overviewGroup.insert_child_at_index(actor, 0);
             this._overviewActors.push(actor);
         }
+    }
+
+    async _showOverviewWallpaperWithTexture(background, file, style, generation) {
+        const {texture, colorState} = await this._loadBackgroundTexture(file);
+        if (generation !== this._overviewGeneration || !this._bgSettings)
+            return;
+        background.set_texture(texture, style, colorState);
+        this._applyOverviewBackground(background);
+    }
+
+    _showOverviewWallpaper(uri, generation) {
+        const background = new Meta.Background({meta_display: global.display});
+        const Color = Clutter.Color ?? Cogl.Color;
+        const [, primary] = Color.from_string(this._bgSettings.get_string('primary-color'));
+        const [, secondary] = Color.from_string(this._bgSettings.get_string('secondary-color'));
+        const shading = this._bgSettings.get_enum('color-shading-type');
+        if (shading === 0)
+            background.set_color(primary);
+        else
+            background.set_gradient(shading, primary, secondary);
+
+        const style = this._bgSettings.get_enum('picture-options');
+        const file = uri ? Gio.File.new_for_uri(uri) : null;
+        if (typeof background.set_file === 'function') {
+            background.set_file(file, style);
+            this._applyOverviewBackground(background);
+            return null;
+        }
+        if (!file) {
+            this._applyOverviewBackground(background);
+            return null;
+        }
+        return this._showOverviewWallpaperWithTexture(background, file, style, generation);
     }
 
     _requestOverviewUpdate() {
@@ -310,7 +420,9 @@ export default class BlurWallpaperExtension extends Extension {
                 return;
             if (sourceUri && !uri)
                 return;
-            this._showOverviewWallpaper(uri);
+            const pending = this._showOverviewWallpaper(uri, generation);
+            if (pending)
+                await pending;
         } catch (e) {
             console.error(`BlurWallpaper: overview wallpaper failed – ${e.message}`);
         } finally {

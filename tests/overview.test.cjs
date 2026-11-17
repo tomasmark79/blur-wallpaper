@@ -297,3 +297,41 @@ test('jobs from a previous enable cannot overwrite a new session', async () => {
     assert.equal(f.extension._overviewBackground.uri, 'file:///cache/10-light.jpg');
     f.extension.disable();
 });
+
+test('overview uses set_texture when Meta.Background lacks set_file (GNOME 51+)', async () => {
+    const f = fixture({overview: false});
+    f.context.Meta.Background = class {
+        set_texture(texture, style, colorState) {
+            this.texture = texture;
+            this.style = style;
+            this.colorState = colorState;
+        }
+        set_color(color) { this.color = color; }
+        set_gradient(...args) { this.gradient = args; }
+    };
+    const loaded = [];
+    let resolveLoad;
+    f.extension._loadBackgroundTexture = file => new Promise(resolve => {
+        loaded.push(file.uri);
+        resolveLoad = resolve;
+    });
+    f.settings.set('overview-wallpaper', true);
+    f.jobs[0].resolve();
+    await tick();
+    assert.deepEqual(loaded, ['file:///cache/30-light.jpg']);
+    assert.equal(f.group.children.length, 0);
+    resolveLoad({texture: 'tex-1', colorState: 'cs-1'});
+    await tick();
+    assert.equal(f.extension._overviewBackground.texture, 'tex-1');
+    assert.equal(f.extension._overviewBackground.colorState, 'cs-1');
+    assert.equal(f.group.children.length, 2);
+
+    // Disabling while texture loading is in flight must not add actors.
+    f.settings.set('overview-intensity', 40);
+    f.jobs[1].resolve();
+    await tick();
+    f.extension.disable();
+    resolveLoad({texture: 'tex-2', colorState: null});
+    await tick();
+    assert.equal(f.group.children.length, 0);
+});
