@@ -276,7 +276,7 @@ export default class BlurWallpaperExtension extends Extension {
     }
 
     async _loadBackgroundTexture(file) {
-        const {default: Glycin} = await import('gi://Glycin');
+        const {default: Glycin} = await import('gi://Gly');
         const stream = await file.read_async(GLib.PRIORITY_DEFAULT, null);
         const loader = Glycin.Loader.new_for_stream(stream);
         loader.set_accepted_memory_formats(
