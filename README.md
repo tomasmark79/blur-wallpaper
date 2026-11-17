@@ -20,7 +20,7 @@ Blur is baked into cached images, so your wallpaper **needs no live GPU blur eff
 
 ## Requirements
 
-Declared GNOME Shell versions: **46–50**, as listed in `metadata.json`.
+Declared GNOME Shell versions: **46–51**, as listed in `metadata.json`.
 ImageMagick with the `magick` command must be available in `PATH` at runtime.
 
 Build tools: Bash, Python 3, Node.js (syntax checks), zip and `glib-compile-schemas`.
